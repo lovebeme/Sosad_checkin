@@ -2,12 +2,12 @@ const got = require("got");
 
 const tokens = require("./helper/token");
 const botToken = tokens.botToken;
-const chatID = tokens.chatID;
+// 若原本的 chatID 尾端帶有 "&",這裡一併去掉
+const chatID = String(tokens.chatID).replace(/&.*$/, "");
 const sosad_cookie = tokens.sosad_cookie;
 
 const sosad = got.extend({
   prefixUrl: "https://sosad.fun/",
-  // responseType: 'json',
   headers: {
     Cookie: sosad_cookie,
     "user-agent":
@@ -15,44 +15,52 @@ const sosad = got.extend({
   },
 });
 
-function teleMsg(msg) {
-  const telegram =
-    "https://api.telegram.org/bot" +
-    botToken +
-    "/sendMessage?chat_id=" +
-    chatID +
-    "parse_mode=HTML&text=";
-
-  (async () => {
-    try {
-      await got(telegram + msg);
-    } catch (error) {
-      console.log(error.response.body);
-    }
-  })();
+async function teleMsg(msg) {
+  try {
+    await got("https://api.telegram.org/bot" + botToken + "/sendMessage", {
+      searchParams: { chat_id: chatID, text: msg },
+    });
+  } catch (error) {
+    console.log("Telegram 通知失敗:");
+    console.log(error.response ? error.response.body : error.message);
+  }
 }
 
 (async () => {
+  console.log("Starting...");
+  const now = new Date().toLocaleString("zh-CN", {
+    timeZone: "Australia/Sydney",
+    timeZoneName: "long",
+  });
+
   try {
-    console.log("Starting...");
     const response = await sosad("qiandao");
 
-    let now = new Date().toLocaleString("zh-CN", {
-      timeZone: "Australia/Sydney",
-      timeZoneName: "long",
-    });
-
-    let message = `
-✅ 签到于 ${now}
+    const finalUrl = String(response.url || "");
+    const redirected = (response.redirectUrls || []).map(String).join(", ");
+    const info = `
 The status code: ${response.statusCode}.
 The requested URL: ${response.requestUrl}.
-The redirected URL: ${response.redirectUrls}.
+The final URL: ${finalUrl}.
+The redirected URL: ${redirected}.
 `;
 
-    console.log(message);
-    teleMsg(encodeURI(message));
+    // 被導向登入頁 = Cookie 失效,沒有真的簽到
+    if (/login/i.test(finalUrl) || /login/i.test(redirected)) {
+      const msg = `❌ 廢文網簽到失敗:Cookie 已失效,請重新取得 Cookie 並更新 Secrets。\n${now}\n${info}`;
+      console.log(msg);
+      await teleMsg(msg);
+      process.exitCode = 1;
+      return;
+    }
+
+    const msg = `✅ 廢文網簽到完成 ${now}\n${info}`;
+    console.log(msg);
+    await teleMsg(msg);
   } catch (error) {
-    console.log("Here is the error:");
-    console.log(error);
+    const msg = `❌ 廢文網簽到出錯 ${now}\n${error.message}`;
+    console.log(msg);
+    await teleMsg(msg);
+    process.exitCode = 1;
   }
 })();
